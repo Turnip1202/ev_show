@@ -1,0 +1,94 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze code
+        run: flutter analyze
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Get version from pubspec
+        id: get_version
+        shell: pwsh
+        run: |
+          $version = (Get-Content pubspec.yaml | Select-String "^version:").ToString().Split(":")[1].Trim().Split("+")[0]
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          $version = "${{ steps.get_version.outputs.VERSION }}"
+          $releaseDir = "build\windows\x64\runner\Release"
+          $packageDir = "dist\ev_show_v${version}_windows_x64"
+
+          New-Item -ItemType Directory -Force $packageDir | Out-Null
+
+          # 复制所有发布文件
+          Copy-Item -Recurse "$releaseDir\*" "$packageDir\"
+
+          # 创建使用说明
+          $readme = @"
+          ev_show v$version - 开发环境检测工具
+          ==========================================
+
+          使用方法：
+          1. 双击 ev_show.exe 启动程序
+          2. 程序会自动扫描本机安装的开发环境
+          3. 点击任意卡片可查看详细信息和常用命令
+
+          系统要求：
+          - Windows 10/11 x64
+          - 无需安装任何运行时
+
+          项目主页：https://github.com/XtangUser/ev_show
+          "@
+          $readme | Out-File -FilePath "$packageDir\使用说明.txt" -Encoding UTF8
+
+          # 打包 zip
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "$packageDir\*" -DestinationPath "dist\ev_show_v${version}_windows_x64.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ev_show-windows-x64
+          path: dist/*.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+          body: |
+            ## ev_show ${{ steps.get_version.outputs.VERSION }}
+
+            开发环境检测工具 - 一键查看本机所有开发工具版本
+
+            ### 下载说明
+            下载 `ev_show_vX.X.X_windows_x64.zip`，解压后双击 `ev_show.exe` 即可使用，无需安装。
+
+            ### 系统要求
+            - Windows 10/11 x64
